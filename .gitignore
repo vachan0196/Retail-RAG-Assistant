@@ -1,0 +1,28 @@
+# --- Environment ---
+.env
+*.env
+
+# --- Artifacts & cache ---
+artifacts/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+.streamlit/
+
+# --- Build & dist ---
+dist/
+build/
+*.egg-info/
+
+# --- IDE / editor ---
+.vscode/
+.idea/
+
+# --- OS files ---
+.DS_Store
+Thumbs.db
+
+# --- Docker exports ---
+*.tar
