@@ -1,116 +1,134 @@
-🛍️ Retail RAG Assistant
+# 🛍️ Retail RAG Assistant
 
-An AI-powered Q&A assistant for retail knowledge bases.
-Built with RAG (Retrieval-Augmented Generation), FAISS vector search, and modern LLMs (Cohere / OpenAI).
+> An **AI-powered Q&A assistant** for retail companies, built with **RAG (Retrieval-Augmented Generation)**, **FAISS vector search**, and **LLMs (OpenAI/Cohere)**.  
+> It can answer questions about **returns, refunds, warranty, shipping, and product catalogues** by retrieving from your internal docs — with citations.
 
-This project demonstrates real-world AI skills companies expect in 2025:
+---
 
-✅ RAG pipelines (retriever + reranker + generator)
+![Python](https://img.shields.io/badge/Python-3.11-blue?logo=python&logoColor=white)
+![Streamlit](https://img.shields.io/badge/Streamlit-App-red?logo=streamlit)
+![Docker](https://img.shields.io/badge/Docker-Ready-blue?logo=docker)
+![FAISS](https://img.shields.io/badge/VectorDB-FAISS-green)
+![License](https://img.shields.io/badge/License-MIT-lightgrey)
 
-✅ Vector databases (FAISS locally, Pinecone/Weaviate for production)
+---
 
-✅ Semantic search with embeddings
+## ✨ Features
+- **Document ingestion & chunking** (policies, FAQs, product catalogue, sales summaries)  
+- **Semantic search** with embeddings + FAISS  
+- **Reranking** using cross-encoder for higher precision  
+- **LLM-powered answers** (OpenAI / Cohere, with offline fallback)  
+- **Evaluation** (Hit@K, MRR, faithfulness)  
+- **Streamlit UI** with citations & clear sources  
+- **Dockerized** for easy deployment  
+- **Environment template** via `.env.example` (no secrets committed)
 
-✅ Prompt/context engineering
+---
 
-✅ LLMOps basics (evaluation, feedback logging)
 
-✅ Deployment via Streamlit + Docker
 
-📂 Project Structure
+## ▶️ Usage
+
+### 1. Run ingestion (chunk documents)
+```bash
+python ingest.py
+```
+
+### 2. Build embeddings + FAISS index
+```bash
+python index.py embed
+python index.py build
+```
+
+### 3. Smoke test retrieval
+```bash
+python index.py search --q "What is the return window for returns?" --k 5
+```
+
+### 4. Ask questions (CLI)
+```bash
+python rag.py --cmd answer --q "What is the return window for returns?" --k 10 --rk 5
+```
+
+### 5. Launch Streamlit app
+```bash
+streamlit run app.py
+```
+Then open 👉 [http://localhost:8501](http://localhost:8501)
+
+---
+
+## 📂 Project Structure
+```
 retail-rag-assistant/
 │
 ├── app.py                  # Streamlit UI
 ├── rag.py                  # Retrieval + generation pipeline
 ├── ingest.py               # Chunk & ingest documents
 ├── index.py                # Embeddings + FAISS index
-├── eval.py                 # Simple evaluation scripts
+├── eval.py                 # Evaluation scripts
 ├── utils/                  # Helper functions
+│   ├── io.py
+│   ├── prompts.py
+│   └── text.py
+│
 ├── requirements.txt        # Dependencies
 ├── Dockerfile              # Docker setup
-├── .dockerignore
-├── .gitignore
-└── .env.example            # Environment template (no secrets)
+├── .dockerignore           # Docker ignore rules
+├── .gitignore              # Git ignore rules
+└── .env.example            # Env template (no secrets)
+```
 
-⚡ Setup
-1) Clone the repo
-git clone https://github.com/vachan0196/Retail-RAG-Assistant.git
-cd Retail-RAG-Assistant
+---
 
-2) Create environment
-conda create -n retail-rag python=3.11 -y
-conda activate retail-rag
-pip install -r requirements.txt
+## 🐳 Docker
 
-3) Configure environment variables
-
-Copy the example env and fill in your keys:
-
-cp .env.example .env
-
-▶️ Usage
-Run ingestion (chunk documents)
-python ingest.py
-
-Build embeddings & FAISS index
-python index.py embed
-python index.py build
-
-Test retrieval + RAG pipeline
-python rag.py --cmd answer --q "What is the return window for returns?" --k 8 --rk 5
-
-Launch Streamlit app
-streamlit run app.py
-
-🐳 Run with Docker
+### 📦 Build image
+```bash
 docker build -t retail-rag .
-docker run -p 8501:8501 retail-rag
+```
 
+### ▶️ Run container
+```bash
+docker run --rm -p 8501:8501 --env-file .env retail-rag
+```
 
-App will be live at http://localhost:8501
-.
+Then open 👉 [http://localhost:8501](http://localhost:8501)
 
-📊 Evaluation (LLMOps-lite)
-python eval.py
+---
 
+## 🔑 Environment Variables
+See `.env.example` for template.
 
-Outputs:
+```ini
+OPENAI_API_KEY=your_OpenAI_key_here
+COHERE_API_KEY=your_cohere_key_here
 
-Retrieval metrics (Hit@k, MRR)
+DOCS_DIR=/app/docs
+USE_OPENAI=false
+USE_COHERE=true
 
-Faithfulness check samples → artifacts/eval/results.json
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
 
-🌟 Features
+TOP_K=8
+RERANK_TOP_K=5
 
-Semantic search with sentence-transformers/all-MiniLM-L6-v2
+PINECONE_API_KEY=your_key_here
+PINECONE_INDEX=retail-rag
 
-Cross-encoder reranking (ms-marco-MiniLM-L-6-v2)
+WEAVIATE_URL=your_url_here
+WEAVIATE_API_KEY=your_key_here
 
-Flexible generation (OpenAI GPT-4o-mini / Cohere command-r / offline fallback)
+HF_CACHE_DIR=/app/artifacts/models
+```
 
-Streamlit chat UI with citations and sources
+---
 
-Clean modular design (easy to extend with Pinecone, Weaviate, or LangChain)
+## 📸 Demo (Optional)
+Add a screenshot or GIF of your Streamlit app running here for extra impact. Example:
 
-🚀 Business Impact
+![Retail RAG Assistant Demo](demo-screenshot.png)
 
-This project shows how retail companies can:
+---
 
-Reduce support load by automating FAQs (returns, warranty, delivery)
-
-Provide faster answers grounded in policies & product catalogues
-
-Extend to sales insights, recommendations, and seasonal analysis
-
-📌 Notes
-
-Never commit .env with real keys. Only use .env.example.
-
-Models are cached locally (HF_CACHE_DIR), not stored in GitHub.
-
-👤 Author
-
-Vachan Sardar
-Data Science, ML Engineering, AI Agents
-
-LinkedIn www.linkedin.com/in/vachan-sardar
