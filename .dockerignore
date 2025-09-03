@@ -1,0 +1,23 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Artifacts (don’t bake into Docker image, rebuild inside container if needed)
+artifacts/
+*.faiss
+*.npy
+*.jsonl
+
+# Env files (keep secrets out of image)
+.env
+.env.*
+
+# Git / local dev
+.git
+.gitignore
+.DS_Store
+
+# VSCode / IDE
+.vscode/
