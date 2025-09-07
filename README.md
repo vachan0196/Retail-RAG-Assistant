@@ -125,10 +125,14 @@ HF_CACHE_DIR=/app/artifacts/models
 
 ---
 
-## 📸 Demo (Optional)
-Add a screenshot or GIF of your Streamlit app running here for extra impact. Example:
+## 📸 Demo
 
-![Retail RAG Assistant Demo](demo-screenshot.png)
+<img width="1915" height="923" alt="1" src="https://github.com/user-attachments/assets/debd5af4-501c-44bb-9e2f-ae4705dff0c6" />
+<img width="1915" height="922" alt="2" src="https://github.com/user-attachments/assets/cd8277f3-da26-40bd-a92c-d9e2265dee76" />
+<img width="1903" height="916" alt="3" src="https://github.com/user-attachments/assets/2c4dc543-55ed-4a7f-85b8-7d7fc050ff6c" />
+<img width="1918" height="922" alt="4" src="https://github.com/user-attachments/assets/fd4adb46-bf0d-4bd1-a008-c54f1dfe5fed" />
+
 
 ---
+
 
