@@ -8,8 +8,7 @@ ujson==5.9.0
 rich==13.7.1
 
 # --- ML / NLP ---
-# Torch CPU wheel source to ensure fast install
-torch==2.2.2 --extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.2.2
 transformers==4.41.2
 sentence-transformers==2.6.0
 scikit-learn==1.4.2
