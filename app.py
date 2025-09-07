@@ -6,17 +6,54 @@ import re
 import time
 import json
 import uuid
+from pathlib import Path
+
 import streamlit as st
 from dotenv import load_dotenv
 
 # RAG pipeline entrypoint
 from rag import answer_from_context
 
+# Optional: auto-build embeddings + FAISS index on first run
+from utils.io import ARTIFACTS_DIR
+from index import embed_chunks, build_faiss_index
+
 # ---------- Boot ----------
 load_dotenv()
 st.set_page_config(page_title="Retail Knowledge Assistant", layout="wide")
 
-# ---------- Helpers ----------
+# ---------- Secrets/env helpers ----------
+def getenv(key: str, default: str = "") -> str:
+    """
+    Prefer Streamlit secrets (Streamlit Cloud) and fall back to environment/.env.
+    """
+    try:
+        return st.secrets.get(key, os.getenv(key, default))
+    except Exception:
+        return os.getenv(key, default)
+
+def getbool(key: str, default: bool = False) -> bool:
+    val = getenv(key, str(default)).strip().lower()
+    return val in ("1", "true", "yes", "y", "on")
+
+# ---------- One-time: ensure FAISS index exists ----------
+def ensure_index():
+    """
+    Build embeddings + FAISS index if missing (useful for first run on Streamlit Cloud).
+    """
+    faiss_dir = ARTIFACTS_DIR / "faiss"
+    idx = faiss_dir / "index.faiss"
+    meta = faiss_dir / "meta.json"
+    emb = faiss_dir / "embeddings.npy"
+    if not idx.exists() or not meta.exists() or not emb.exists():
+        with st.spinner("🔧 First run: building vector index…"):
+            embed_chunks()
+            build_faiss_index()
+        st.success("✅ Index built")
+
+ensure_index()
+
+# ---------- Helpers (UI cleaning) ----------
 def clean(s: str) -> str:
     """Sanitize titles/headers for clean display."""
     if not s:
@@ -57,13 +94,16 @@ st.caption("Ask about returns, refunds, warranty, shipping, and products — ans
 # ---------- Sidebar controls ----------
 st.sidebar.header("Settings")
 
-# Provider selection (overrides env toggles at runtime)
+# Read initial provider flags (secrets/env)
+initial_use_cohere = getbool("USE_COHERE", True)
+initial_use_openai = getbool("USE_OPENAI", False)
+
 provider = st.sidebar.selectbox(
     "Generation provider",
     ["Cohere", "OpenAI", "Offline"],
-    index=0 if os.getenv("USE_COHERE", "false").lower() == "true"
-         else (1 if os.getenv("USE_OPENAI", "false").lower() == "true" else 2)
+    index=0 if initial_use_cohere else (1 if initial_use_openai else 2)
 )
+
 # Reflect provider into env for this session (rag.py reads os.getenv each call)
 os.environ["USE_COHERE"] = "true" if provider == "Cohere" else "false"
 os.environ["USE_OPENAI"] = "true" if provider == "OpenAI" else "false"
@@ -84,7 +124,6 @@ st.sidebar.caption(
 )
 
 st.sidebar.subheader("Recent searches")
-# Show newest first, click to re-run
 for i, qprev in enumerate(reversed(st.session_state.get("recent_queries", [])), 1):
     label = f"{i}. {qprev[:60]}{'…' if len(qprev) > 60 else ''}"
     if st.sidebar.button(label, key=f"recent_{i}"):

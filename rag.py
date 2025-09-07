@@ -1,8 +1,7 @@
 # rag.py
 from __future__ import annotations
 
-import os, json, argparse, math
-import re
+import os, json, argparse, math, re
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
@@ -14,20 +13,45 @@ from sentence_transformers import SentenceTransformer, CrossEncoder
 from utils.io import ARTIFACTS_DIR
 from utils.prompts import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE, format_context
 
+# ---------- boot / secrets helpers ----------
 load_dotenv()
 
-EMBED_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
-RERANKER_MODEL = os.getenv("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+# Prefer Streamlit secrets if running under Streamlit Cloud; fallback to env
+try:
+    import streamlit as st
+    _SECRETS = st.secrets  # Mapping-like
+except Exception:
+    _SECRETS = {}
 
-# ---- NEW: local cache for HF models to avoid network rate limits ----
-CACHE_DIR = os.getenv("HF_CACHE_DIR", "artifacts/models")
+def env(key: str, default: str = "") -> str:
+    """Read config from Streamlit secrets first, then os.getenv."""
+    val = _SECRETS.get(key, None)
+    if val is None:
+        return os.getenv(key, default)
+    # Streamlit secrets values can be non-str; normalize
+    return str(val)
+
+def env_bool(key: str, default: bool = False) -> bool:
+    val = env(key, str(default)).strip().lower()
+    return val in ("1", "true", "yes", "y", "on")
+
+# ---------- model + cache config ----------
+EMBED_MODEL   = env("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+RERANKER_MODEL= env("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+
+# Local HF cache (helps on Streamlit Cloud to avoid repeated downloads)
+CACHE_DIR = env("HF_CACHE_DIR", "artifacts/models")
 Path(CACHE_DIR).mkdir(parents=True, exist_ok=True)
+# Respect if huggingface_hub reads HF_HOME / TRANSFORMERS_CACHE
+os.environ.setdefault("HF_HOME", CACHE_DIR)
+os.environ.setdefault("TRANSFORMERS_CACHE", CACHE_DIR)
+os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", CACHE_DIR)
 
-FAISS_DIR = ARTIFACTS_DIR / "faiss"
+FAISS_DIR  = ARTIFACTS_DIR / "faiss"
 INDEX_PATH = FAISS_DIR / "index.faiss"
-EMB_PATH = FAISS_DIR / "embeddings.npy"   # not strictly needed here
-META_PATH = FAISS_DIR / "meta.json"
-IDS_PATH = FAISS_DIR / "ids.json"
+EMB_PATH   = FAISS_DIR / "embeddings.npy"   # not strictly needed here
+META_PATH  = FAISS_DIR / "meta.json"
+IDS_PATH   = FAISS_DIR / "ids.json"
 
 @dataclass
 class Hit:
@@ -37,7 +61,7 @@ class Hit:
     doc_type: str
     header_path: str
     source_path: str
-    text: Optional[str] = None  # filled if needed
+    text: Optional[str] = None
 
 def _load_index_and_meta():
     import faiss
@@ -49,13 +73,14 @@ def _load_index_and_meta():
     index = faiss.read_index(str(INDEX_PATH))
     with META_PATH.open("r", encoding="utf-8") as f:
         meta = json.load(f)
-    ids = json.load(open(IDS_PATH, "r", encoding="utf-8"))
+    with IDS_PATH.open("r", encoding="utf-8") as f:
+        ids = json.load(f)
     id_to_meta = {m["id"]: m for m in meta["meta"]}
     return index, id_to_meta, ids
 
 def _load_chunks_text_map() -> Dict[str, str]:
     chunks_path = ARTIFACTS_DIR / "chunks" / "chunks.jsonl"
-    mp = {}
+    mp: Dict[str, str] = {}
     with chunks_path.open("r", encoding="utf-8") as f:
         for line in f:
             row = json.loads(line)
@@ -72,11 +97,11 @@ def retrieve(
     import faiss
     index, id_to_meta, ids = _load_index_and_meta()
 
-    # ---- CHANGED: use cache_folder for the encoder ----
     emb_model = SentenceTransformer(EMBED_MODEL, cache_folder=CACHE_DIR)
     qv = emb_model.encode([query], convert_to_numpy=True, normalize_embeddings=True).astype(np.float32)
 
-    D, I = index.search(qv, top_k * 3)  # over-fetch to allow filtering, then cut to top_k
+    # Over-fetch to allow optional filtering
+    D, I = index.search(qv, top_k * 3)
     prelim: List[Hit] = []
     id_text = _load_chunks_text_map()
 
@@ -109,12 +134,11 @@ def rerank(query: str, hits: List[Hit], rerank_top_k: int = 5) -> List[Hit]:
     """CrossEncoder reranking: re-score (query, chunk_text) pairs."""
     if not hits:
         return []
-    # ---- CHANGED: use cache_folder for the reranker ----
     reranker = CrossEncoder(RERANKER_MODEL, cache_folder=CACHE_DIR)
     pairs = [(query, h.text or "") for h in hits]
     scores = reranker.predict(pairs)  # logits
     for h, s in zip(hits, scores):
-        prob = 1 / (1 + math.exp(-float(s)))  # for display
+        prob = 1 / (1 + math.exp(-float(s)))  # for display only
         h.score = float(prob)
     hits.sort(key=lambda h: h.score, reverse=True)
     return hits[:rerank_top_k]
@@ -137,9 +161,10 @@ def _top_chunks_for_prompt(hits, max_chars: int = 5000):
         total += len(block)
     return out
 
+# ---------- LLM providers ----------
 def _call_openai(system_prompt: str, user_prompt: str) -> str:
     from openai import OpenAI
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    client = OpenAI(api_key=env("OPENAI_API_KEY", ""))
     resp = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role":"system","content":system_prompt},
@@ -149,11 +174,12 @@ def _call_openai(system_prompt: str, user_prompt: str) -> str:
     return resp.choices[0].message.content.strip()
 
 def _call_cohere(system_prompt: str, user_prompt: str) -> str:
-    import cohere, os
-    api_key = os.getenv("COHERE_API_KEY")
+    import cohere
+    api_key = env("COHERE_API_KEY", "")
     if not api_key:
         raise RuntimeError("Missing COHERE_API_KEY")
     co = cohere.Client(api_key)
+    # Try classic signature
     try:
         resp = co.chat(model="command-r", preamble=system_prompt, message=user_prompt, temperature=0.2)
         if getattr(resp, "text", None):
@@ -162,15 +188,18 @@ def _call_cohere(system_prompt: str, user_prompt: str) -> str:
         pass
     except Exception:
         raise
+    # Try newer signature
     try:
         resp = co.chat(
             model="command-r",
-            messages=[{"role":"system","content":system_prompt},{"role":"user","content":user_prompt}],
+            messages=[{"role":"system","content":system_prompt},
+                      {"role":"user","content":user_prompt}],
             temperature=0.2,
         )
         if getattr(resp, "text", None):
             return resp.text.strip()
     except TypeError:
+        # Final fallback: generate()
         text = f"{system_prompt}\n\n{user_prompt}"
         gen = co.generate(model="command", prompt=text, temperature=0.2)
         return gen.generations[0].text.strip()
@@ -183,8 +212,8 @@ def answer_from_context(query: str, top_k: int = 10, rerank_top_k: int = 5) -> T
     ctx_str = format_context(ctx_items)
     user_prompt = USER_PROMPT_TEMPLATE.format(question=query, context=ctx_str)
 
-    use_openai = os.getenv("USE_OPENAI", "false").lower() == "true" and os.getenv("OPENAI_API_KEY")
-    use_cohere = os.getenv("USE_COHERE", "false").lower() == "true" and os.getenv("COHERE_API_KEY")
+    use_openai = env_bool("USE_OPENAI", False) and bool(env("OPENAI_API_KEY", ""))
+    use_cohere = env_bool("USE_COHERE", True)  and bool(env("COHERE_API_KEY", ""))
 
     if use_openai:
         try:
@@ -202,7 +231,7 @@ def answer_from_context(query: str, top_k: int = 10, rerank_top_k: int = 5) -> T
         except Exception as e:
             print(f"[gen] Cohere failed -> falling back. Reason: {repr(e)}")
 
-    # Offline fallback: extract time windows + crisp answer
+    # ---------- Offline fallback: extract time windows + crisp answer ----------
     time_patterns = [
         r"\b(\d{1,3})\s*[-–]\s*(\d{1,3})\s*(business\s+days|days|working\s+days)\b",
         r"\b(\d{1,3})\s*(business\s+days|days|working\s+days|calendar\s+days)\b",
@@ -248,6 +277,7 @@ def answer_from_context(query: str, top_k: int = 10, rerank_top_k: int = 5) -> T
                 answer += "\n\n**Related timings:**\n" + "\n".join(extras)
         return answer, hits
 
+    # Fallback to quick bullets
     lines = []
     for h in hits:
         hdr = f" §{h.header_path}" if h.header_path else ""
@@ -262,7 +292,7 @@ def answer_from_context(query: str, top_k: int = 10, rerank_top_k: int = 5) -> T
     answer = "Here’s what I found:\n" + "\n".join(lines)
     return answer, hits
 
-# -------- CLI for quick testing --------
+# ---------- CLI ----------
 def _print_hits(query: str, hits: List[Hit], header: str):
     print(f"\nQuery: {query}")
     print(header)
