@@ -3,62 +3,54 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import time
 import json
 import uuid
 from pathlib import Path
+import subprocess
 
 import streamlit as st
 from dotenv import load_dotenv
 
-# RAG pipeline entrypoint
+# RAG pipeline entrypoint (Cohere/Offline path; no FAISS on cloud)
 from rag import answer_from_context
-
-# Optional: auto-build embeddings + FAISS index on first run
-from utils.io import ARTIFACTS_DIR
-from index import embed_chunks, build_faiss_index
 
 # ---------- Boot ----------
 load_dotenv()
 st.set_page_config(page_title="Retail Knowledge Assistant", layout="wide")
 
-# ---------- Secrets/env helpers ----------
+# ---------- First-run: make sure chunks.jsonl exists (cloud-safe) ----------
+def ensure_chunks():
+    """
+    On Streamlit Cloud we don't ship prebuilt artifacts.
+    If artifacts/chunks/chunks.jsonl is missing, run ingest.py once.
+    """
+    chunks_path = Path("artifacts/chunks/chunks.jsonl")
+    if not chunks_path.exists():
+        Path("artifacts/chunks").mkdir(parents=True, exist_ok=True)
+        with st.spinner("📄 First run: preparing document chunks…"):
+            subprocess.run([sys.executable, "ingest.py"], check=True)
+
+ensure_chunks()
+
+# ---------- Helpers (env + UI cleaning) ----------
 def getenv(key: str, default: str = "") -> str:
-    """
-    Prefer Streamlit secrets (Streamlit Cloud) and fall back to environment/.env.
-    """
+    """Prefer Streamlit secrets on cloud; fall back to environment/.env locally."""
     try:
         return st.secrets.get(key, os.getenv(key, default))
     except Exception:
         return os.getenv(key, default)
 
 def getbool(key: str, default: bool = False) -> bool:
-    val = getenv(key, str(default)).strip().lower()
+    val = str(getenv(key, str(default))).strip().lower()
     return val in ("1", "true", "yes", "y", "on")
 
-# ---------- One-time: ensure FAISS index exists ----------
-def ensure_index():
-    """
-    Build embeddings + FAISS index if missing (useful for first run on Streamlit Cloud).
-    """
-    faiss_dir = ARTIFACTS_DIR / "faiss"
-    idx = faiss_dir / "index.faiss"
-    meta = faiss_dir / "meta.json"
-    emb = faiss_dir / "embeddings.npy"
-    if not idx.exists() or not meta.exists() or not emb.exists():
-        with st.spinner("🔧 First run: building vector index…"):
-            embed_chunks()
-            build_faiss_index()
-        st.success("✅ Index built")
-
-ensure_index()
-
-# ---------- Helpers (UI cleaning) ----------
 def clean(s: str) -> str:
     """Sanitize titles/headers for clean display."""
     if not s:
         return ""
-    s = re.sub(r"[^a-zA-Z0-9\s\-\&\(\)\.,:]", "", s)  # strip odd chars like $, #, *, etc.
+    s = re.sub(r"[^a-zA-Z0-9\s\-\&\(\)\.,:]", "", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
@@ -91,6 +83,13 @@ def provider_label() -> str:
 st.title("🛍️ Retail Knowledge Assistant")
 st.caption("Ask about returns, refunds, warranty, shipping, and products — answers are grounded in your internal docs with citations.")
 
+# ---------- Session state (init early so sidebar can read it) ----------
+if "history" not in st.session_state:
+    # (query, answer, hits, latency_sec, provider_str)
+    st.session_state.history = []
+if "recent_queries" not in st.session_state:
+    st.session_state.recent_queries = []  # persists even when chat is cleared
+
 # ---------- Sidebar controls ----------
 st.sidebar.header("Settings")
 
@@ -112,7 +111,6 @@ top_k = st.sidebar.slider("Retriever top-k", 5, 20, 10)
 rerank_k = st.sidebar.slider("Rerank top-k", 1, 10, 5)
 
 st.sidebar.divider()
-# Clear chat should NOT clear recent searches
 if st.sidebar.button("🗑️ Clear chat"):
     st.session_state.history = []
     st.rerun()
@@ -131,13 +129,6 @@ for i, qprev in enumerate(reversed(st.session_state.get("recent_queries", [])), 
         st.rerun()
 if not st.session_state.get("recent_queries"):
     st.sidebar.caption("No recent searches yet.")
-
-# ---------- Session state ----------
-if "history" not in st.session_state:
-    # Entries: (query, answer, hits, latency_sec, provider_str)
-    st.session_state.history = []
-if "recent_queries" not in st.session_state:
-    st.session_state.recent_queries = []  # persisted even when chat is cleared
 
 # ---------- Query input ----------
 query = st.text_input(
