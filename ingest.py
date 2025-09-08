@@ -27,7 +27,7 @@ def load_metadata_index() -> Dict[str, Dict[str, Any]]:
 
 def build_chunks_for_file(p: Path, meta: Dict[str, Any]) -> List[Dict[str, Any]]:
     text = read_text(p)
-    chunks = markdown_to_chunks(text, max_tokens=900, overlap_tokens=150)
+    chunks = markdown_to_chunks(text, max_tokens=900, overlap=150)
     out: List[Dict[str, Any]] = []
     for i, ch in enumerate(chunks):
         chunk_id = stable_id(f"{p.name}|{i}|{ch['header_path'][:120]}")
