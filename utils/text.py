@@ -25,11 +25,26 @@ except Exception:
 
 # --- rest of your file below stays the same ---
 
-def markdown_to_chunks(text: str, *, max_tokens: int = 350, overlap: int = 40) -> List[str]:
+def markdown_to_chunks(
+    text: str,
+    *,
+    max_tokens: int = 350,
+    overlap: int = 40,
+    **kwargs
+) -> List[str]:
     """
     Simple markdown segmenter with token-budgeted chunks.
     Uses count_tokens() which works with/without tiktoken.
+
+    Accepts alias 'overlap_tokens' for backward-compat.
     """
+    # Backward-compat alias
+    if "overlap_tokens" in kwargs and isinstance(kwargs["overlap_tokens"], (int, float, str)):
+        try:
+            overlap = int(kwargs["overlap_tokens"])
+        except Exception:
+            pass
+
     # normalize newlines
     text = (text or "").replace("\r\n", "\n")
     # split on headers/blank lines as soft boundaries
