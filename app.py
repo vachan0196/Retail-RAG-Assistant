@@ -1,53 +1,16 @@
 # app.py
 from __future__ import annotations
 
-import os
-import re
-import sys
-import time
-import json
-import uuid
-from pathlib import Path
-import subprocess
-
+import os, re, time, json, uuid
 import streamlit as st
 from dotenv import load_dotenv
 
-# RAG pipeline entrypoint (Cohere/Offline path; no FAISS on cloud)
 from rag import answer_from_context
 
-# ---------- Boot ----------
 load_dotenv()
 st.set_page_config(page_title="Retail Knowledge Assistant", layout="wide")
 
-# ---------- First-run: make sure chunks.jsonl exists (cloud-safe) ----------
-def ensure_chunks():
-    """
-    On Streamlit Cloud we don't ship prebuilt artifacts.
-    If artifacts/chunks/chunks.jsonl is missing, run ingest.py once.
-    """
-    chunks_path = Path("artifacts/chunks/chunks.jsonl")
-    if not chunks_path.exists():
-        Path("artifacts/chunks").mkdir(parents=True, exist_ok=True)
-        with st.spinner("📄 First run: preparing document chunks…"):
-            subprocess.run([sys.executable, "ingest.py"], check=True)
-
-ensure_chunks()
-
-# ---------- Helpers (env + UI cleaning) ----------
-def getenv(key: str, default: str = "") -> str:
-    """Prefer Streamlit secrets on cloud; fall back to environment/.env locally."""
-    try:
-        return st.secrets.get(key, os.getenv(key, default))
-    except Exception:
-        return os.getenv(key, default)
-
-def getbool(key: str, default: bool = False) -> bool:
-    val = str(getenv(key, str(default))).strip().lower()
-    return val in ("1", "true", "yes", "y", "on")
-
 def clean(s: str) -> str:
-    """Sanitize titles/headers for clean display."""
     if not s:
         return ""
     s = re.sub(r"[^a-zA-Z0-9\s\-\&\(\)\.,:]", "", s)
@@ -55,11 +18,6 @@ def clean(s: str) -> str:
     return s
 
 def clean_answer(text: str) -> str:
-    """
-    - Normalize inline citations: [Title §Header] -> [Title > Header]
-    - Remove stray '$'
-    - Tidy whitespace/newlines
-    """
     if not text:
         return ""
     def _cit_sub(m: re.Match) -> str:
@@ -79,31 +37,16 @@ def provider_label() -> str:
         return "cohere"
     return "offline"
 
-# ---------- UI: Header ----------
 st.title("🛍️ Retail Knowledge Assistant")
 st.caption("Ask about returns, refunds, warranty, shipping, and products — answers are grounded in your internal docs with citations.")
 
-# ---------- Session state (init early so sidebar can read it) ----------
-if "history" not in st.session_state:
-    # (query, answer, hits, latency_sec, provider_str)
-    st.session_state.history = []
-if "recent_queries" not in st.session_state:
-    st.session_state.recent_queries = []  # persists even when chat is cleared
-
-# ---------- Sidebar controls ----------
 st.sidebar.header("Settings")
-
-# Read initial provider flags (secrets/env)
-initial_use_cohere = getbool("USE_COHERE", True)
-initial_use_openai = getbool("USE_OPENAI", False)
-
 provider = st.sidebar.selectbox(
     "Generation provider",
     ["Cohere", "OpenAI", "Offline"],
-    index=0 if initial_use_cohere else (1 if initial_use_openai else 2)
+    index=0 if os.getenv("USE_COHERE", "false").lower() == "true"
+         else (1 if os.getenv("USE_OPENAI", "false").lower() == "true" else 2)
 )
-
-# Reflect provider into env for this session (rag.py reads os.getenv each call)
 os.environ["USE_COHERE"] = "true" if provider == "Cohere" else "false"
 os.environ["USE_OPENAI"] = "true" if provider == "OpenAI" else "false"
 
@@ -130,7 +73,11 @@ for i, qprev in enumerate(reversed(st.session_state.get("recent_queries", [])), 
 if not st.session_state.get("recent_queries"):
     st.sidebar.caption("No recent searches yet.")
 
-# ---------- Query input ----------
+if "history" not in st.session_state:
+    st.session_state.history = []
+if "recent_queries" not in st.session_state:
+    st.session_state.recent_queries = []
+
 query = st.text_input(
     "Ask about returns, refunds, warranty, delivery, products…",
     key="query_input"
@@ -143,13 +90,11 @@ if query:
     prov = provider_label()
     st.session_state.history.append((query, answer, hits, latency, prov))
 
-    # Update recent searches (keep max 5; avoid duplicating the same last query)
     rq = st.session_state.recent_queries
     if not rq or rq[-1] != query:
         rq.append(query)
     st.session_state.recent_queries = rq[-5:]
 
-    # Lightweight logging (LLMOps-lite)
     try:
         os.makedirs("artifacts/logs", exist_ok=True)
         log_path = "artifacts/logs/interactions.jsonl"
@@ -174,16 +119,13 @@ if query:
     except Exception:
         pass
 
-# ---------- Render chat (newest first) ----------
 for q, a, hits, t, prov in reversed(st.session_state.history):
     st.markdown(f"**You:** {q}")
     st.markdown(clean_answer(a))
-
     with st.expander("Sources"):
         for h in (hits or [])[:rerank_k]:
             hdr = f" > {clean(h.header_path)}" if h.header_path else ""
             st.write(f"- {clean(h.title)}{hdr}")
             st.code(h.source_path, language="text")
-
     st.caption(f"Answered in {t:.2f}s • top-k={top_k} • rerank={rerank_k} • provider={prov}")
     st.divider()

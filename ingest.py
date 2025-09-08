@@ -1,89 +1,88 @@
 # ingest.py
 from __future__ import annotations
-import hashlib
+import os, argparse, json
 from pathlib import Path
-from typing import Dict, Any, List
-from utils.io import (
-    ensure_dirs, docs_path, list_markdown_files, read_text,
-    read_document_index, CHUNKS_DIR, PROJECT_ROOT
-)
-from utils.text import markdown_to_chunks, count_tokens
+from typing import List, Dict, Any
+from dotenv import load_dotenv
 
-def stable_id(s: str) -> str:
-    return hashlib.sha1(s.encode("utf-8")).hexdigest()[:16]
+from utils.io import PROJECT_ROOT, CHUNKS_DIR
+from utils.text import markdown_to_chunks, count_tokens, stable_id
 
-def load_metadata_index() -> Dict[str, Dict[str, Any]]:
-    """
-    Build a map from filename -> metadata from document_index.csv (if present).
-    """
-    csv_path = docs_path("document_index.csv")
-    rows = read_document_index(csv_path)
-    meta_by_file: Dict[str, Dict[str, Any]] = {}
-    for r in rows:
-        filename = r.get("filename") or ""
-        if filename:
-            meta_by_file[filename] = r
-    return meta_by_file
+load_dotenv()
+
+DOCS_DIR = Path(os.getenv("DOCS_DIR", str(PROJECT_ROOT / "docs")))
 
 def build_chunks_for_file(p: Path, meta: Dict[str, Any]) -> List[Dict[str, Any]]:
-    text = read_text(p)
-    chunks = markdown_to_chunks(text, max_tokens=900, overlap=150)
-    out: List[Dict[str, Any]] = []
-    for i, ch in enumerate(chunks):
-        chunk_id = stable_id(f"{p.name}|{i}|{ch['header_path'][:120]}")
-        record = {
-            "id": chunk_id,
-            "doc_filename": p.name,
-            "source_path": str(p),
-            "title": meta.get("title") or p.stem.replace("_", " ").title(),
-            "doc_type": meta.get("doc_type") or infer_doc_type(p.name),
-            "product_ids": meta.get("product_ids") or [],
-            "tags": meta.get("tags") or [],
-            "header_path": ch["header_path"],
-            "text": ch["chunk_text"],
-            "n_tokens": count_tokens(ch["chunk_text"]),
-        }
-        out.append(record)
-    return out
+    text = p.read_text(encoding="utf-8")
+    # original call style: uses overlap_tokens
+    chunks = markdown_to_chunks(text, max_tokens=900, overlap_tokens=150)
 
-def infer_doc_type(filename: str) -> str:
-    fn = filename.lower()
-    if "policy" in fn: return "policy"
-    if "faq" in fn: return "faq"
-    if "catalogue" in fn or "catalog" in fn: return "catalogue"
-    if "annual" in fn or "summary" in fn: return "report"
-    return "other"
+    rows = []
+    for i, ch in enumerate(chunks):
+        # ch is a dict with header_path & text (from utils.text original)
+        chunk_id = stable_id(f"{p.name}|{i}|{ch['header_path'][:120]}")
+        rows.append({
+            "id": chunk_id,
+            "title": meta.get("title", p.stem),
+            "doc_type": meta.get("doc_type", "unknown"),
+            "header_path": ch.get("header_path", ""),
+            "source_path": str(p),
+            "text": ch.get("text", ""),
+            "n_tokens": count_tokens(ch.get("text", "")),
+        })
+    return rows
 
 def main():
-    ensure_dirs()
-    meta_index = load_metadata_index()
-    md_files = list_markdown_files(docs_path())
+    if not DOCS_DIR.exists():
+        raise SystemExit(f"Docs dir not found: {DOCS_DIR}")
 
-    if not md_files:
-        print("No Markdown files found in your DOCS_DIR. Check .env -> DOCS_DIR.")
-        return
+    files = sorted(list(DOCS_DIR.glob("*.md")))
+    if not files:
+        raise SystemExit("No Markdown files found in your DOCS_DIR. Check .env -> DOCS_DIR.")
 
-    all_chunks: List[Dict[str, Any]] = []
-    total_tokens = 0
-    file_stats = []
-
-    for p in md_files:
-        base = p.name
-        meta = meta_index.get(base, {})
-        chunks = build_chunks_for_file(p, meta)
-        all_chunks.extend(chunks)
-        total_tokens += sum(c["n_tokens"] for c in chunks)
-        file_stats.append((base, len(chunks)))
-
-    # Write a single consolidated JSONL
+    CHUNKS_DIR.mkdir(parents=True, exist_ok=True)
     out_path = CHUNKS_DIR / "chunks.jsonl"
-    from utils.io import write_jsonl
-    write_jsonl(all_chunks, out_path)
 
-    print(f"✅ Ingestion complete: {len(all_chunks)} chunks -> {out_path}")
-    for base, n in file_stats:
-        print(f"  - {base}: {n} chunks")
-    print(f"≈ Total tokens across chunks: {total_tokens:,}")
+    # optional metadata map (document_index.csv), but we’ll keep it simple here
+    def infer_meta(path: Path) -> Dict[str, Any]:
+        name = path.stem.lower()
+        if "faq" in name:
+            dt = "faq"
+            title = "Faq"
+        elif "policy_returns" in name or "returns_refunds" in name:
+            dt = "policy"
+            title = "Policy Returns Refunds"
+        elif "shipping" in name or "delivery" in name:
+            dt = "policy"
+            title = "Policy Shipping Delivery"
+        elif "warranty" in name:
+            dt = "policy"
+            title = "Policy Warranty"
+        elif "catalogue" in name or "catalog" in name:
+            dt = "product"
+            title = "Product Catalogue"
+        elif "annual_sales" in name:
+            dt = "summary"
+            title = "Annual Sales Summary 2024"
+        else:
+            dt = "unknown"
+            title = path.stem
+        return {"doc_type": dt, "title": title}
+
+    total = 0
+    per_file = {}
+    with out_path.open("w", encoding="utf-8") as f:
+        for p in files:
+            meta = infer_meta(p)
+            rows = build_chunks_for_file(p, meta)
+            for r in rows:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+            total += len(rows)
+            per_file[p.name] = len(rows)
+
+    print(f"✅ Ingestion complete: {total} chunks -> {out_path}")
+    for k, v in per_file.items():
+        print(f"  - {k}: {v} chunks")
 
 if __name__ == "__main__":
     main()
