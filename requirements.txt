@@ -22,7 +22,7 @@ huggingface_hub>=0.23
 safetensors>=0.4
 
 # --- Vector index (CPU wheels available on Linux) ---
-faiss-cpu==1.7.4.post2
+faiss-cpu>=1.8.0,<1.13
 
 # --- Inference providers ---
 openai>=1.30,<2
